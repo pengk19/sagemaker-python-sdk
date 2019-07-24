@@ -185,7 +185,7 @@ Here is an example:
 
 Use Scripts Stored in a Git Repository
 --------------------------------------
-When you create an estimator, you can specify a training script that is stored in a GitHub or other Git repository as the entry point for the estimator, so that you don't have to download the scripts locally.
+When you create an estimator, you can specify a training script that is stored in a GitHub (or other Git) or CodeCommit repository as the entry point for the estimator, so that you don't have to download the scripts locally.
 If you do so, source directory and dependencies should be in the same repo if they are needed. Git support can be enabled simply by providing ``git_config`` parameter
 when creating an ``Estimator`` object. If Git support is enabled, then ``entry_point``, ``source_dir`` and  ``dependencies``
 should be relative paths in the Git repo if provided.
@@ -195,18 +195,25 @@ The ``git_config`` parameter includes fields ``repo``, ``branch``,  ``commit``, 
 repository where your training script is stored. If you don't provide ``branch``, the default value  'master' is used.
 If you don't provide ``commit``, the latest commit in the specified branch is used.
 
-``2FA_enabled``, ``username``, ``password`` and ``token`` are used for authentication. Set ``2FA_enabled`` to 'True' if
-two-factor authentication is enabled for the GitHub (or other Git) account, otherwise set it to 'False'.
-If you do not provide a value for ``2FA_enabled``, a default value of 'False' is used.
+``2FA_enabled``, ``username``, ``password`` and ``token`` are used for authentication. For GitHub
+(or other Git) accounts, set ``2FA_enabled`` to 'True' if two-factor authentication is enabled for the
+account, otherwise set it to 'False'. If you do not provide a value for ``2FA_enabled``, a default
+value of 'False' is used. CodeCommit does not support two-factor authentication, so do not provide
+"2FA_enabled" with CodeCommit repositories.
 
+For GitHub or other Git repositories,
 If ``repo`` is an SSH URL, you should either have no passphrase for the SSH key pairs, or have the ``ssh-agent`` configured
 so that you are not prompted for the SSH passphrase when you run a ``git clone`` command with SSH URLs. For SSH URLs, it
-does not matter whether two-factor authentication is enabled.
-
-If ``repo`` is an https URL, 2FA matters. When 2FA is disabled, either ``token`` or ``username``+``password`` will be
+does not matter whether two-factor authentication is enabled. If ``repo`` is an HTTPS URL, 2FA matters. When 2FA is disabled, either ``token`` or ``username``+``password`` will be
 used for authentication if provided (``token`` prioritized). When 2FA is enabled, only token will be used for
 authentication if provided. If required authentication info is not provided, python SDK will try to use local
 credentials storage to authenticate. If that fails either, an error message will be thrown.
+
+For CodeCommit repos, please make sure you have completed the authentication setup: https://docs.aws.amazon.com/codecommit/latest/userguide/setting-up.html.
+2FA is not supported by CodeCommit, so ``2FA_enabled`` should not be provided. There is no token in CodeCommit, so
+``token`` should not be provided either. If ``repo`` is an SSH URL, the requirements are the same as GitHub repos.
+If ``repo`` is an HTTPS URL, ``username``+``password`` will be used for authentication if they are provided; otherwise,
+Python SDK will try to use either CodeCommit credential helper or local credential storage for authentication.
 
 Here are some examples of creating estimators with Git support:
 
@@ -275,6 +282,19 @@ Here are some examples of creating estimators with Git support:
                                     git_config=git_config,
                                     train_instance_count=1,
                                     train_instance_type='local')
+
+.. code:: python
+
+        # This example specifies a CodeCommit repository, and try to authenticate with provided username+password
+        git_config = {'repo': 'https://git-codecommit.us-west-2.amazonaws.com/v1/repos/your_repo_name',
+                      'username': 'username',
+                      'password': 'passw0rd!'}
+
+        mx_estimator = MXNet(entry_point='mxnet/mnist.py',
+                             role='SageMakerRole',
+                             git_config=git_config,
+                             train_instance_count=1,
+                             train_instance_type='ml.c4.xlarge')
 
 Git support can be used not only for training jobs, but also for hosting models. The usage is the same as the above,
 and ``git_config`` should be provided when creating model objects, e.g. ``TensorFlowModel``, ``MXNetModel``, ``PyTorchModel``.
@@ -805,59 +825,6 @@ When this training job is created, the SageMaker Python SDK will upload the file
 A new training job channel, named ``code``, will be added with that S3 URI.  Before the training docker container is initialized, the ``sourcedir.tar.gz`` will be downloaded from S3 to the ML storage volume like any other offline input channel.
 
 Once the training job begins, the training container will look at the offline input ``code`` channel to install dependencies and run the entry script. This isolates the training container, so no inbound or outbound network calls can be made.
-
-*********
-BYO Model
-*********
-
-You can also create an endpoint from an existing model rather than training one.
-That is, you can bring your own model:
-
-First, package the files for the trained model into a ``.tar.gz`` file, and upload the archive to S3.
-
-Next, create a ``Model`` object that corresponds to the framework that you are using: `MXNetModel <https://sagemaker.readthedocs.io/en/stable/sagemaker.mxnet.html#mxnet-model>`__ or `TensorFlowModel <https://sagemaker.readthedocs.io/en/stable/sagemaker.tensorflow.html#tensorflow-model>`__.
-
-Example code using ``MXNetModel``:
-
-.. code:: python
-
-   from sagemaker.mxnet.model import MXNetModel
-
-   sagemaker_model = MXNetModel(model_data='s3://path/to/model.tar.gz',
-                                role='arn:aws:iam::accid:sagemaker-role',
-                                entry_point='entry_point.py')
-
-After that, invoke the ``deploy()`` method on the ``Model``:
-
-.. code:: python
-
-   predictor = sagemaker_model.deploy(initial_instance_count=1,
-                                      instance_type='ml.m4.xlarge')
-
-This returns a predictor the same way an ``Estimator`` does when ``deploy()`` is called. You can now get inferences just like with any other model deployed on Amazon SageMaker.
-
-Git support is also available when you bring your own model, through which you can use inference scripts stored in your
-Git repositories. The process is similar to using Git support for training jobs. You can simply provide ``git_config``
-when create the ``Model`` object, and let ``entry_point``, ``source_dir`` and ``dependencies`` (if needed) be relative
-paths inside the Git repository:
-
-.. code:: python
-
-    git_config = {'repo': 'https://github.com/username/repo-with-training-scripts.git',
-                  'branch': 'branch1',
-                  'commit': '4893e528afa4a790331e1b5286954f073b0f14a2'}
-
-    sagemaker_model = MXNetModel(model_data='s3://path/to/model.tar.gz',
-                                role='arn:aws:iam::accid:sagemaker-role',
-                                entry_point='inference.py',
-                                source_dir='mxnet',
-                                git_config=git_config)
-
-A full example is available in the `Amazon SageMaker examples repository <https://github.com/awslabs/amazon-sagemaker-examples/tree/master/advanced_functionality/mxnet_mnist_byom>`__.
-
-You can also find this notebook in the **Advanced Functionality** section of the **SageMaker Examples** section in a notebook instance.
-For information about using sample notebooks in a SageMaker notebook instance, see `Use Example Notebooks <https://docs.aws.amazon.com/sagemaker/latest/dg/howitworks-nbexamples.html>`__
-in the AWS documentation.
 
 *******************
 Inference Pipelines

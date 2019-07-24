@@ -1,4 +1,4 @@
-# Copyright 2017-2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# Copyright 2017-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"). You
 # may not use this file except in compliance with the License. A copy of
@@ -55,6 +55,9 @@ PRIVATE_GIT_REPO_SSH = "git@github.com:testAccount/private-repo.git"
 PRIVATE_GIT_REPO = "https://github.com/testAccount/private-repo.git"
 PRIVATE_BRANCH = "test-branch"
 PRIVATE_COMMIT = "329bfcf884482002c05ff7f44f62599ebc9f445a"
+CODECOMMIT_REPO = "https://git-codecommit.us-west-2.amazonaws.com/v1/repos/test-repo/"
+CODECOMMIT_REPO_SSH = "ssh://git-codecommit.us-west-2.amazonaws.com/v1/repos/test-repo/"
+CODECOMMIT_BRANCH = "master"
 REPO_DIR = "/tmp/repo_dir"
 
 DESCRIBE_TRAINING_JOB_RESULT = {"ModelArtifacts": {"S3ModelArtifacts": MODEL_DATA}}
@@ -109,8 +112,10 @@ class DummyFramework(Framework):
     def train_image(self):
         return IMAGE_NAME
 
-    def create_model(self, role=None, model_server_workers=None):
-        return DummyFrameworkModel(self.sagemaker_session, vpc_config=self.get_vpc_config())
+    def create_model(self, role=None, model_server_workers=None, entry_point=None):
+        return DummyFrameworkModel(
+            self.sagemaker_session, vpc_config=self.get_vpc_config(), entry_point=entry_point
+        )
 
     @classmethod
     def _prepare_init_params_from_job_description(cls, job_details, model_channel_name=None):
@@ -122,13 +127,13 @@ class DummyFramework(Framework):
 
 
 class DummyFrameworkModel(FrameworkModel):
-    def __init__(self, sagemaker_session, **kwargs):
+    def __init__(self, sagemaker_session, entry_point=None, **kwargs):
         super(DummyFrameworkModel, self).__init__(
             MODEL_DATA,
             MODEL_IMAGE,
             INSTANCE_TYPE,
             ROLE,
-            ENTRY_POINT,
+            entry_point or ENTRY_POINT,
             sagemaker_session=sagemaker_session,
             **kwargs
         )
@@ -1129,6 +1134,63 @@ def test_git_support_ssh_passphrase_required(git_clone_repo, sagemaker_session):
     with pytest.raises(subprocess.CalledProcessError) as error:
         fw.fit()
     assert "returned non-zero exit status" in str(error)
+
+
+@patch(
+    "sagemaker.git_utils.git_clone_repo",
+    side_effect=lambda gitconfig, entrypoint, source_dir=None, dependencies=None: {
+        "entry_point": "/tmp/repo_dir/entry_point",
+        "source_dir": None,
+        "dependencies": None,
+    },
+)
+def test_git_support_codecommit_with_username_and_password_succeed(
+    git_clone_repo, sagemaker_session
+):
+    git_config = {
+        "repo": CODECOMMIT_REPO,
+        "branch": CODECOMMIT_BRANCH,
+        "username": "username",
+        "password": "passw0rd!",
+    }
+    entry_point = "entry_point"
+    fw = DummyFramework(
+        entry_point=entry_point,
+        git_config=git_config,
+        role=ROLE,
+        sagemaker_session=sagemaker_session,
+        train_instance_count=INSTANCE_COUNT,
+        train_instance_type=INSTANCE_TYPE,
+        enable_cloudwatch_metrics=True,
+    )
+    fw.fit()
+    git_clone_repo.assert_called_once_with(git_config, entry_point, None, [])
+    assert fw.entry_point == "/tmp/repo_dir/entry_point"
+
+
+@patch(
+    "sagemaker.git_utils.git_clone_repo",
+    side_effect=lambda gitconfig, entrypoint, source_dir=None, dependencies=None: {
+        "entry_point": "/tmp/repo_dir/entry_point",
+        "source_dir": None,
+        "dependencies": None,
+    },
+)
+def test_git_support_codecommit_with_ssh_no_passphrase_needed(git_clone_repo, sagemaker_session):
+    git_config = {"repo": CODECOMMIT_REPO_SSH, "branch": CODECOMMIT_BRANCH}
+    entry_point = "entry_point"
+    fw = DummyFramework(
+        entry_point=entry_point,
+        git_config=git_config,
+        role=ROLE,
+        sagemaker_session=sagemaker_session,
+        train_instance_count=INSTANCE_COUNT,
+        train_instance_type=INSTANCE_TYPE,
+        # enable_cloudwatch_metrics=True,
+    )
+    fw.fit()
+    git_clone_repo.assert_called_once_with(git_config, entry_point, None, [])
+    assert fw.entry_point == "/tmp/repo_dir/entry_point"
 
 
 @patch("time.strftime", return_value=TIMESTAMP)
